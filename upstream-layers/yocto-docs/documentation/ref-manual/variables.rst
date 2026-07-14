@@ -300,6 +300,9 @@ system and gives an overview of their function and contents.
       variable), the OpenEmbedded build system ignores your request and
       will install the packages to avoid dependency errors.
 
+      This variable is supported for the RPM and IPK packaging backends,
+      but not for DEB.
+
       See the :term:`NO_RECOMMENDATIONS` and the
       :term:`PACKAGE_EXCLUDE` variables for related
       information.
@@ -1391,7 +1394,7 @@ system and gives an overview of their function and contents.
       When inheriting the :ref:`ref-classes-buildhistory`
       class, this variable specifies the build history features to be
       enabled. For more information on how build history works, see the
-      ":ref:`dev-manual/build-quality:maintaining build output quality`"
+      ":ref:`dev-manual/build-quality:maintaining build output quality with \`\`buildhistory\`\``"
       section in the Yocto Project Development Tasks Manual.
 
       You can specify these features in the form of a space-separated list:
@@ -1526,6 +1529,11 @@ system and gives an overview of their function and contents.
       When inheriting the :ref:`ref-classes-ccache` class, the
       :term:`CCACHE_DISABLE` variable can be set to "1" in a recipe to disable
       `Ccache` support. This is useful when the recipe is known to not support it.
+
+   :term:`CCACHE_NATIVE_RECIPES_ALLOWED`
+      The :term:`CCACHE_NATIVE_RECIPES_ALLOWED` variable can be set in a
+      :term:`configuration file` to a list of native recipes that are allowed to
+      be optimized with the :ref:`ref-classes-ccache` class.
 
    :term:`CCACHE_TOP_DIR`
       When inheriting the :ref:`ref-classes-ccache` class, the
@@ -1802,12 +1810,49 @@ system and gives an overview of their function and contents.
       Where :term:`AUTOTOOLS_SCRIPT_PATH` is the location of the of the
       Autotools build system scripts, which defaults to :term:`S`.
 
+   :term:`CONFLICT_COMBINED_FEATURES`
+      When inheriting the :ref:`ref-classes-features_check`
+      class, this variable identifies combined features (see
+      :term:`COMBINED_FEATURES` for what this means) that would be in conflict
+      should the recipe be built. In other words, if the
+      :term:`CONFLICT_COMBINED_FEATURES` variable lists a feature that also
+      appears in :term:`COMBINED_FEATURES` within the current configuration,
+      then the recipe will be skipped, and if the build system attempts to build
+      the recipe then an error will be triggered.
+
    :term:`CONFLICT_DISTRO_FEATURES`
       When inheriting the :ref:`ref-classes-features_check`
-      class, this variable identifies distribution features that would be
+      class, this variable identifies distro features that would be
       in conflict should the recipe be built. In other words, if the
       :term:`CONFLICT_DISTRO_FEATURES` variable lists a feature that also
       appears in :term:`DISTRO_FEATURES` within the current configuration, then
+      the recipe will be skipped, and if the build system attempts to build
+      the recipe then an error will be triggered.
+
+   :term:`CONFLICT_IMAGE_FEATURES`
+      When inheriting the :ref:`ref-classes-features_check`
+      class, this variable identifies image features that would be
+      in conflict should the recipe be built. In other words, if the
+      :term:`CONFLICT_IMAGE_FEATURES` variable lists a feature that also
+      appears in :term:`IMAGE_FEATURES` within the current configuration, then
+      the recipe will be skipped, and if the build system attempts to build
+      the recipe then an error will be triggered.
+
+   :term:`CONFLICT_MACHINE_FEATURES`
+      When inheriting the :ref:`ref-classes-features_check`
+      class, this variable identifies machine features that would be
+      in conflict should the recipe be built. In other words, if the
+      :term:`CONFLICT_MACHINE_FEATURES` variable lists a feature that also
+      appears in :term:`MACHINE_FEATURES` within the current configuration, then
+      the recipe will be skipped, and if the build system attempts to build
+      the recipe then an error will be triggered.
+
+   :term:`CONFLICT_TUNE_FEATURES`
+      When inheriting the :ref:`ref-classes-features_check`
+      class, this variable identifies tune features that would be
+      in conflict should the recipe be built. In other words, if the
+      :term:`CONFLICT_TUNE_FEATURES` variable lists a feature that also
+      appears in :term:`TUNE_FEATURES` within the current configuration, then
       the recipe will be skipped, and if the build system attempts to build
       the recipe then an error will be triggered.
 
@@ -2273,6 +2318,11 @@ system and gives an overview of their function and contents.
       ":ref:`overview-manual/concepts:application development sdk`" sections all in the
       Yocto Project Overview and Concepts Manual.
 
+      .. warning::
+
+         Do not confuse this variable with the similarly-named
+         :term:`DEPLOYDIR` variable.
+
    :term:`DEPLOY_DIR_DEB`
       Points to the area that the OpenEmbedded build system uses to place
       Debian packages that are ready to be used outside of the build
@@ -2362,6 +2412,11 @@ system and gives an overview of their function and contents.
       deployed into :term:`DEPLOYDIR`, and the class will take care of copying
       them into :term:`DEPLOY_DIR_IMAGE`
       afterwards.
+
+      .. warning::
+
+         Do not confuse this variable with the similarly-named
+         :term:`DEPLOY_DIR` variable.
 
    :term:`DESCRIPTION`
       The package description used by package managers. If not set,
@@ -3901,13 +3956,8 @@ system and gives an overview of their function and contents.
       ``groupadd``, see https://linux.die.net/man/8/groupadd.
 
    :term:`GROUPMEMS_PARAM`
-      When inheriting the :ref:`ref-classes-useradd` class,
-      this variable specifies for a package what parameters should be
-      passed to the ``groupmems`` command if you wish to modify the members
-      of a group when the package is installed.
-
-      For information on the standard Linux shell command ``groupmems``,
-      see https://linux.die.net/man/8/groupmems.
+      Deprecated in favor of :term:`USERMOD_PARAMS`. See
+      :ref:`ref-migration-6-1-groupmems` for more information.
 
    :term:`GRUB_GFXSERIAL`
       Configures the GNU GRand Unified Bootloader (GRUB) to have graphics
@@ -4310,6 +4360,21 @@ system and gives an overview of their function and contents.
             variable, you cannot update its contents by using ``:append``
             or ``:prepend``. You must use the ``+=`` operator to add one or
             more options to the :term:`IMAGE_FSTYPES` variable.
+
+   :term:`IMAGE_FSTYPES_DEBUGFS`
+      The :term:`IMAGE_FSTYPES_DEBUGFS` holds a list of filesystem image types
+      to generate when the :term:`IMAGE_GEN_DEBUGFS` variable is set to "1". The
+      content of this variable is the same as what is supported by the
+      :term:`IMAGE_FSTYPES` variable.
+
+   :term:`IMAGE_GEN_DEBUGFS`
+      When set to "1" in an :ref:`ref-classes-image` recipe, the
+      :term:`OpenEmbedded Build System` will generate a companion image that
+      contains the debug symbols and source code for the packages installed on
+      the image. The :term:`OpenEmbedded Build System` does this by adding all
+      the available ``-dbg`` and ``-src`` packages available in the package
+      feed, which are automatically generated during
+      :ref:`overview-manual/concepts:Package Splitting`.
 
    :term:`IMAGE_INSTALL`
       Used by recipes to specify the packages to install into an image
@@ -5871,7 +5936,8 @@ system and gives an overview of their function and contents.
       section in the Yocto Project Development Tasks Manual.
 
    :term:`LICENSE`
-      The list of source licenses for the recipe. Follow these rules:
+      This is a required field in an OpenEmbedded recipe file, and should
+      contain a list of source licenses for the recipe. Follow these rules:
 
       -  Do not use spaces within individual license names.
 
@@ -5910,6 +5976,12 @@ system and gives an overview of their function and contents.
          LICENSE = "GFDL-1.2 & GPL-2.0-only"
          LICENSE:${PN} = "GPL-2.0.only"
          LICENSE:${PN}-doc = "GFDL-1.2"
+
+      .. note::
+
+         A recipe's :term:`LICENSE` value must be accompanied by an associated
+         :term:`LIC_FILES_CHKSUM` value, except in the special case where
+         the :term:`LICENSE` value is set to "CLOSED".
 
    :term:`LICENSE_CREATE_PACKAGE`
       Setting :term:`LICENSE_CREATE_PACKAGE` to "1" causes the OpenEmbedded
@@ -6024,6 +6096,12 @@ system and gives an overview of their function and contents.
 
          $ uname -r
          3.7.0-rc8-custom
+
+   :term:`LOCALE_PATHS`
+      The :term:`LOCALE_PATHS` variable holds a whitespace separated list of
+      paths that are scanned to construct ``-locale`` packages during
+      :ref:`overview-manual/concepts:Package Splitting`. The list
+      contains ``${datadir}/locale`` by default.
 
    :term:`LOG_DIR`
       Specifies the directory to which the OpenEmbedded build system writes
@@ -6498,8 +6576,7 @@ system and gives an overview of their function and contents.
          functionality, such as kernel modules. It is up to you to add
          packages with the :term:`IMAGE_INSTALL` variable.
 
-      This variable is only supported when using the IPK and RPM
-      packaging backends. DEB is not supported.
+      This variable is supported for all packaging backends.
 
       See the :term:`BAD_RECOMMENDATIONS` and
       the :term:`PACKAGE_EXCLUDE` variables for
@@ -6930,8 +7007,7 @@ system and gives an overview of their function and contents.
       an iterative development process to remove specific components from a
       system.
 
-      This variable is supported only when using the IPK and RPM
-      packaging backends. DEB is not supported.
+      This variable is supported for all packaging backends.
 
       See the :term:`NO_RECOMMENDATIONS` and the
       :term:`BAD_RECOMMENDATIONS` variables for
@@ -8431,6 +8507,12 @@ system and gives an overview of their function and contents.
    :term:`RM_WORK_EXCLUDE`
       With :ref:`ref-classes-rm-work` enabled, this variable
       specifies a list of recipes whose work directories should not be removed.
+      See the ":ref:`ref-classes-rm-work`" section for more details.
+
+   :term:`RM_WORK_EXCLUDE_ITEMS`
+      With :ref:`ref-classes-rm-work` enabled, this variable specifies
+      a list of files or folders --- relative to the recipe's :term:`WORKDIR` ---
+      to be preserved.
       See the ":ref:`ref-classes-rm-work`" section for more details.
 
    :term:`ROOT_HOME`
@@ -10077,6 +10159,24 @@ system and gives an overview of their function and contents.
 
       For details on the process, see the :ref:`ref-classes-staging` class.
 
+   :term:`SSTATE_SIG_KEY`
+      When signing :ref:`shared state <overview-manual/concepts:setscene tasks
+      and shared state>` artifacts (when :term:`SSTATE_VERIFY_SIG` is set to
+      "1"), the :term:`SSTATE_SIG_KEY` variable is the :wikipedia:`GPG
+      <GNU_Privacy_Guard>` key identifier used to sign them.
+
+      See :doc:`/security-manual/sstate-signing` in the Yocto Project Security
+      Manual for more information.
+
+   :term:`SSTATE_SIG_PASSPHRASE`
+      When signing :ref:`shared state <overview-manual/concepts:setscene tasks
+      and shared state>` artifacts (when :term:`SSTATE_VERIFY_SIG` is set to
+      "1"), the :term:`SSTATE_SIG_PASSPHRASE` variable is the passphrase used to
+      protect the private key signing the artifacts.
+
+      See :doc:`/security-manual/sstate-signing` in the Yocto Project Security
+      Manual for more information.
+
    :term:`SSTATE_SKIP_CREATION`
       The :term:`SSTATE_SKIP_CREATION` variable can be used to skip the
       creation of :ref:`shared state <overview-manual/concepts:shared state cache>`
@@ -10096,6 +10196,52 @@ system and gives an overview of their function and contents.
       The syntax to disable it for the whole recipe is::
 
          SSTATE_SKIP_CREATION = "1"
+
+   :term:`SSTATE_VALID_SIGS`
+      When verifying :ref:`shared state <overview-manual/concepts:setscene tasks
+      and shared state>` artifacts (when :term:`SSTATE_VERIFY_SIG` is set to
+      "1"), the :term:`SSTATE_VALID_SIGS` variable is a space-separated list of
+      :wikipedia:`GPG <GNU_Privacy_Guard>` key identifiers to use to verify their
+      signature.
+
+      It must contain the short form identifier of the key pair. For example,
+      when running the ``gpg --list-keys`` command (in bold text below):
+
+      .. parsed-literal::
+
+         pub   ed25519 2026-04-17 [SC]
+               \4049A47E3AAA99D0250966DC\ **5B97632FA7F4E942**
+         uid           [ultimate] Antonin Godard (SState Signing) <antonin.godard\@bootlin.com>
+         sub   cv25519 2026-04-17 [E]
+
+      The short form equals the last 16 characters of the identifier. In the
+      above example: ``5B97632FA7F4E942``.
+
+      .. note::
+
+         If this variable is empty (the default), any of the GPG key present on
+         the :term:`Build Host` can be used by the :term:`OpenEmbedded Build
+         System` to verify the shared state artifacts.
+
+      See :doc:`/security-manual/sstate-signing` in the Yocto Project Security
+      Manual for more information.
+
+   :term:`SSTATE_VERIFY_SIG`
+      The :term:`SSTATE_VERIFY_SIG` variable controls whether to enable or
+      disable the :ref:`shared state <overview-manual/concepts:setscene tasks
+      and shared state>` artifacts signing feature.
+
+      See :doc:`/security-manual/sstate-signing` in the Yocto Project Security
+      Manual for more information.
+
+   :term:`STABLE_VERSION_PARTS`
+      The number of leading dot-separated components of :term:`PV` that
+      constitute the stable version prefix. Used by the
+      :ref:`ref-classes-upstream-stable-release-point` class to generate
+      :term:`UPSTREAM_STABLE_RELEASE_REGEX`. Defaults to ``"2"``.
+
+      For example, with ``PV = "259.5"`` and ``STABLE_VERSION_PARTS = "1"``,
+      the generated regex matches versions starting with ``259``.
 
    :term:`STAGING_BASE_LIBDIR_NATIVE`
       Specifies the path to the ``/lib`` subdirectory of the sysroot
@@ -10294,6 +10440,10 @@ system and gives an overview of their function and contents.
       :term:`SUMMARY` is used to define the
       :term:`DESCRIPTION` variable if :term:`DESCRIPTION` is
       not set in the recipe.
+
+      If you don't set this variable in your recipe file, you will be warned
+      about that and it will be set to a default value from the
+      :oecore_path:`meta/conf/bitbake.conf` file.
 
    :term:`SVNDIR`
       The directory in which files checked out of a Subversion system are
@@ -10848,6 +10998,11 @@ system and gives an overview of their function and contents.
 
          TEST_SERIALCONTROL_CMD = "picocom /dev/ttyUSB0 -b 115200"
 
+   :term:`TEST_SERIALCONTROL_CONNECT_TIMEOUT`
+      For automated hardware testing with the :ref:`ref-classes-testexport`
+      class, the :term:`TEST_SERIALCONTROL_CONNECT_TIMEOUT` variable specifies
+      the timeout in seconds for the initial connection to the target.
+
    :term:`TEST_SERIALCONTROL_EXTRA_ARGS`
       For automated hardware testing, specifies additional arguments to
       pass through to the command specified in
@@ -10855,6 +11010,12 @@ system and gives an overview of their function and contents.
       :term:`TEST_SERIALCONTROL_EXTRA_ARGS` is optional. You can use it if you
       wish, for example, to separate the machine-specific and
       non-machine-specific parts of the command.
+
+   :term:`TEST_SERIALCONTROL_PS1`
+      For automated hardware testing with the :ref:`ref-classes-testexport`
+      class, the :term:`TEST_SERIALCONTROL_PS1` variable specifies a regex
+      string representing an empty prompt on the target terminal. For example:
+      ``root@target:.*#``.
 
    :term:`TEST_SERVER_IP`
       The IP address of the build machine (host machine). This IP address
@@ -11486,6 +11647,10 @@ system and gives an overview of their function and contents.
 
          do_compile[depends] += "trusted-firmware-a:do_deploy"
 
+   :term:`UBOOT_FIT_CONF_DESC`
+      The :term:`UBOOT_FIT_CONF_DESC` can be set to override the description
+      property of the configuration node of a U-Boot FIT image.
+
    :term:`UBOOT_FIT_CONF_FIRMWARE`
       Adds one image to the ``firmware`` property of the configuration node of
       the U-Boot Image Tree Source (ITS). Sets the ``firmware`` property to
@@ -11990,6 +12155,25 @@ system and gives an overview of their function and contents.
 
          UPSTREAM_CHECK_URI = "recipe_url"
 
+   :term:`UPSTREAM_STABLE_RELEASE_REGEX`
+      A regular expression used to filter upstream versions during version
+      checks so that only versions within the same stable series are
+      considered. When set, BitBake's fetchers (git, wget, crate) apply this
+      regex to discovered upstream versions and discard any that do not match.
+
+      For example, if a recipe is at version ``1.4.2`` and the regex is
+      ``^1\.4(\.\d+)*$``, then ``1.4.7`` would be a valid upgrade candidate
+      but ``1.5.0`` would not.
+
+      For recipes with dot-separated versions, inherit the
+      :ref:`ref-classes-upstream-stable-release-point` class to generate this
+      variable automatically. For other versioning schemes, set it directly::
+
+         UPSTREAM_STABLE_RELEASE_REGEX = "^10\.2p\d+$"
+
+      See :ref:`ref-manual/release-process:stable point release upgrades` for
+      the criteria under which this variable should be set.
+
    :term:`UPSTREAM_VERSION_UNKNOWN`
       You can perform a per-recipe check for what the latest upstream
       source code version is by calling ``devtool latest-version recipe``.
@@ -12181,6 +12365,14 @@ system and gives an overview of their function and contents.
       :term:`USERADD_GID_TABLES` variables.
       Additionally, you should also set the
       :term:`USERADD_ERROR_DYNAMIC` variable.
+
+   :term:`USERMOD_PARAMS`
+      When a recipe inherits the :ref:`ref-classes-useradd` class, this variable
+      specifies for a package what parameters should be passed to the ``usermod``
+      command if you wish to modify a user when the package is installed.
+      Is is typically used to add the user to one or more groups. For example::
+
+         USERMOD_PARAM:${PN} = "--append --groups group1,group2 user"
 
    :term:`VIRTUAL-RUNTIME`
       :term:`VIRTUAL-RUNTIME` is a commonly used prefix for defining virtual

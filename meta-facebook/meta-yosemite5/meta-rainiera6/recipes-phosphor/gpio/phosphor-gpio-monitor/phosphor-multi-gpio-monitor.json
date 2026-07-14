@@ -14,10 +14,24 @@
         "Continue": true
     },
     {
+        "Name": "SOC_POST_COMPLETE",
+        "LineName": "SOC_POST_COMPLETE_CPLD",
+        "EventMon": "RISING",
+        "Target": "rainier-gpio-handler@SOC_POST_COMPLETE_CPLD:RISING.service",
+        "Continue": true
+    },
+    {
         "Name": "SOC_SYS_PWRDN",
         "LineName": "SOC_SYS_PWRDN_CPLD",
         "EventMon": "RISING",
         "Target": "rainier-gpio-handler@SOC_SYS_PWRDN_CPLD:RISING.service",
+        "Continue": true
+    },
+    {
+        "Name": "SOC_THRMTRIP",
+        "LineName": "SOC_THRMTRIP_N_CPLD",
+        "EventMon": "FALLING",
+        "Target": "thermal-assert-log@thermtrip_SOC_THRMTRIP_N_CPLD.service",
         "Continue": true
     },
     {
