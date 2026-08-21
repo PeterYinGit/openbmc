@@ -1,0 +1,8 @@
+[Unit]
+Description=system power initialize
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/phosphor-gpio-monitor/system-power-initialize %i
+
+SyslogIdentifier=system-power-initialize

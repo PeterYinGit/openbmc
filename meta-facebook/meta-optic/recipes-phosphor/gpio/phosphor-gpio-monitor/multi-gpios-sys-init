@@ -1,0 +1,8 @@
+#!/bin/bash
+
+# Create /dev/mem
+if [ ! -c /dev/mem ]; then
+    /bin/mknod /dev/mem c 1 1
+fi
+
+exit 0

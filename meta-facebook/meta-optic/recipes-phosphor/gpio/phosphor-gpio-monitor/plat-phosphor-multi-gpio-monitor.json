@@ -1,0 +1,16 @@
+[
+    {
+        "Name": "STBY_POWER_PG_3V3_R",
+        "LineName": "power-3v3-standby-good",
+        "EventMon": "BOTH",
+        "Targets": {
+            "RISING": [
+                "system-power-initialize@0_power-3v3-standby-good.service"
+            ],
+            "INIT_HIGH": [
+                "system-power-initialize@0_power-3v3-standby-good.service"
+            ]
+        },
+        "Continue": true
+    }
+]
