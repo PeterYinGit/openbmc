@@ -1,0 +1,6 @@
+#!/bin/bash
+#Sled cycle
+echo "Starting Chassis Power Cycle"
+
+chassis-power-cycle() {
+}
