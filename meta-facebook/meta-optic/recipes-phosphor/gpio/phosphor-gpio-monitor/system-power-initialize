@@ -3,6 +3,8 @@
 # shellcheck source=meta-facebook/recipes-fb/obmc_functions/files/fb-common-functions
 source /usr/libexec/fb-common-functions
 
+/usr/bin/mfg-tool power-control -p 0 -a on
+
 set_gpio RST_NPO_01_N 1
 set_gpio RST_NPO_02_N 1
 set_gpio RST_NPO_03_N 1
@@ -13,5 +15,5 @@ set_gpio RST_ELS_P02_N_R1 1
 set_gpio RST_ELS_P03_N_R1 1
 set_gpio RST_ELS_P04_N_R1 1
 
-return 0
+exit 0
 
