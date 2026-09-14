@@ -2,5 +2,4 @@
 #Sled cycle
 echo "Starting Chassis Power Cycle"
 
-chassis-power-cycle() {
-}
+i2cset -fy 24 0x10 0xd9
