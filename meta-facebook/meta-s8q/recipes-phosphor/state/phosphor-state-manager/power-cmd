@@ -1,0 +1,495 @@
+#!/bin/bash
+# shellcheck source=meta-facebook/recipes-fb/obmc_functions/files/fb-common-functions
+source /usr/libexec/fb-common-functions
+
+GPIO_HIGH=1
+GPIO_LOW=0
+
+PDB_RUN_PWR_PG_DELAY_SEC="1"
+CPU_RESET_DELAY_SEC="0.2"
+SHUTDOWN_FORCE_DELAY_SEC="0.1"
+
+#======================================
+# output pins (matching aspeed-bmc-facebook-s8q.dts)
+#======================================
+out_pdb_run_power_en="PDB_MAIN_PWR_EN-O"
+out_pdb_ps_on_n="PDB_PS_ON_L-O"
+out_pdb_hpm_en="PDB_P12V_HPM_EN-O"
+out_pdb_gpu1_en="PDB_P12V_GPU1_EN-O"
+out_pdb_gpu2_en="PDB_P12V_GPU2_EN-O"
+out_pdb_tray_rst="PDB_TRAY_RST-O"
+out_smm_usb_pwr_en="USB_PWR_EN-O"
+out_pre_sys_rst_n="B0_M0_IOX_PRE_SYS_RST_N-O"
+out_run_pwr_en="B0_M0_RUN_PWR_EN-O"
+out_shdn_req_n="B0_M0_SHDN_REQ_L_3V3-O"
+out_shdn_force_n="B0_M0_SHDN_FORCE_L-O"
+
+#======================================
+# input pins (matching aspeed-bmc-facebook-s8q.dts)
+#======================================
+in_stby_pwr_pg="STBY_POWER_PG-I"
+in_b0_stby_pwr_pg="B0_M0_STBY_PWR_PG-I"
+in_pdb_pwrsts="PDB_MAIN_PWR_OK-I"
+in_pdb_ps_pwok="PDB_PSU_PWOK-I"
+in_shdn_ok_n="B0_M0_CPU_SHDN_OK_L_3V3-I"
+in_cpu_rst_n="CPU_RST_L-I"
+in_run_pwr_pg="B0_M0_MODULE_PWR_GOOD-I"
+
+wait_gpios_value()
+{
+    local expd_val=$1
+    local max_retries=$2
+    local delay_secs=$3
+    local net_names=("${@:4}")
+
+    if [ ${#net_names[@]} -eq 0 ]; then
+        echo "Error: Missing GPIO names for checking."
+        return 1
+    fi
+
+    declare -A last_values
+    local gpio_val=0
+    local trycnt=1
+    local all_match=1
+    local rc=0
+
+    until [[ $trycnt -gt $max_retries ]]; do
+        all_match=1
+
+        for net_name in "${net_names[@]}"; do
+            gpio_val=$(get_gpio_val_by_name "$net_name")
+            rc=$?
+
+            if [[ $rc -ne 0 ]]; then
+                echo "Error: Unable to read GPIO $net_name (returned $rc)."
+                return 1
+            fi
+
+            if [[ $gpio_val -ne $expd_val ]]; then
+                all_match=0
+            fi
+
+            last_values["$net_name"]="$gpio_val"
+        done
+
+        if [[ $all_match -eq 1 ]]; then
+            return 0
+        fi
+
+        sleep "$delay_secs"
+        ((trycnt++))
+    done
+
+    echo "Failure: wait_gpios_value() timeout, retry: $max_retries, delay: $delay_secs"
+    echo "--- Last GPIO Readings (Expected: $expd_val) ---"
+    for net_name in "${net_names[@]}"; do
+        printf "  %s: %s\n" "$net_name" "${last_values["$net_name"]}"
+    done
+    echo "------------------------------------------------"
+    return 1
+}
+
+chassis_power_cycle()
+{
+    # power off host
+    host_force_power_off
+
+    set_gpio "$out_pdb_tray_rst" "$GPIO_HIGH"
+}
+
+chassis_power_on()
+{
+    # MB standby power should be enabled before BMC ready
+    # So only do checking here.
+    if [[ "$(chassis_power_status)" != "on" ]]; then
+        return 1
+    fi
+    return 0
+}
+
+chassis_power_status()
+{
+    if [[ "$(get_gpio_val_by_name "$in_stby_pwr_pg")" -eq 0 ]]; then
+        echo "off"
+    elif [[ "$(get_gpio_val_by_name "$in_b0_stby_pwr_pg")" -eq 0 ]]; then
+        echo "off"
+    else
+        echo "on"
+    fi
+}
+
+pdb_run_pwr_set_n_check()
+{
+    # Assert PDB PSU Power On (active low) and Main Power Enable
+    set_gpio "$out_pdb_ps_on_n" "$GPIO_LOW"
+    set_gpio "$out_pdb_run_power_en" "$GPIO_HIGH"
+
+    if ! wait_gpios_value "$GPIO_HIGH" 11 0.1 "$in_pdb_ps_pwok"; then
+        echo "ERROR: $in_pdb_ps_pwok failed to assert"
+        set_gpio "$out_pdb_ps_on_n" "$GPIO_HIGH"
+        set_gpio "$out_pdb_run_power_en" "$GPIO_LOW"
+        return 1
+    fi
+
+    # Enable C2 PDB 12V rails
+    set_gpio "$out_pdb_hpm_en" "$GPIO_HIGH"
+    set_gpio "$out_pdb_gpu1_en" "$GPIO_HIGH"
+    set_gpio "$out_pdb_gpu2_en" "$GPIO_HIGH"
+
+    sleep "$PDB_RUN_PWR_PG_DELAY_SEC"
+
+    if [[ "$(get_gpio_val_by_name "$in_pdb_pwrsts")" -eq "$GPIO_LOW" ]]; then
+        echo "ERROR: $in_pdb_pwrsts failed to assert"
+        set_gpio "$out_pdb_hpm_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_gpu1_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_gpu2_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_run_power_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_ps_on_n" "$GPIO_HIGH"
+        return 1
+    fi
+
+    return 0
+}
+
+pdb_run_pwr_release_n_check()
+{
+    # Disable C2 PDB 12V rails and Main Power Enable
+    set_gpio "$out_pdb_hpm_en" "$GPIO_LOW"
+    set_gpio "$out_pdb_gpu1_en" "$GPIO_LOW"
+    set_gpio "$out_pdb_gpu2_en" "$GPIO_LOW"
+    set_gpio "$out_pdb_run_power_en" "$GPIO_LOW"
+    set_gpio "$out_pdb_ps_on_n" "$GPIO_HIGH"
+
+    sleep "$PDB_RUN_PWR_PG_DELAY_SEC"
+
+    if [[ "$(get_gpio_val_by_name "$in_pdb_ps_pwok")" -eq "$GPIO_HIGH" ]]; then
+        echo "ERROR: $in_pdb_ps_pwok failed to deassert"
+        return 1
+    fi
+
+    return 0
+}
+
+cpu_reset_set_n_check()
+{
+    # Set CPU reset and check
+    set_gpio "$out_pre_sys_rst_n" "$GPIO_LOW"
+
+    local retry_cnt=11
+    local delay_secs="$CPU_RESET_DELAY_SEC"
+    if ! wait_gpios_value "$GPIO_LOW" "$retry_cnt" "$delay_secs" "$in_cpu_rst_n"; then
+        echo "ERROR: CPU failed to enter reset"
+        return 1
+    fi
+
+    return 0
+}
+
+cpu_reset_release_n_check()
+{
+    # Release CPU reset and check
+    set_gpio "$out_pre_sys_rst_n" "$GPIO_HIGH"
+
+    local retry_cnt=11
+    local delay_secs="$CPU_RESET_DELAY_SEC"
+    if ! wait_gpios_value "$GPIO_HIGH" "$retry_cnt" "$delay_secs" "$in_cpu_rst_n"; then
+        echo "ERROR: CPU failed to exit reset"
+        return 1
+    fi
+
+    return 0
+}
+
+hpm_run_pwr_set_n_check()
+{
+    # Set B0_M0_RUN_PWR_EN-O, wait B0_M0_MODULE_PWR_GOOD-I assert, 10s timeout
+    set_gpio "$out_run_pwr_en" "$GPIO_HIGH"
+
+    local retry_cnt=11
+    local delay_secs=1
+    if ! wait_gpios_value "$GPIO_HIGH" "$retry_cnt" "$delay_secs" "$in_run_pwr_pg"; then
+        echo "ERROR: HPM $in_run_pwr_pg failed to assert"
+        return 1
+    fi
+
+    return 0
+}
+
+hpm_run_pwr_release_n_check()
+{
+    # Release B0_M0_RUN_PWR_EN-O, wait B0_M0_MODULE_PWR_GOOD-I deassert, 10s timeout
+    set_gpio "$out_run_pwr_en" "$GPIO_LOW"
+
+    local retry_cnt=11
+    local delay_secs=1
+    if ! wait_gpios_value "$GPIO_LOW" "$retry_cnt" "$delay_secs" "$in_run_pwr_pg"; then
+        echo "ERROR: HPM $in_run_pwr_pg failed to deassert"
+        return 1
+    fi
+
+    return 0
+}
+
+shutdown_force_n_check()
+{
+    local b0_val
+
+    # Set Shutdown Force, wait Shutdown OK assert, 100ms timeout
+    set_gpio "$out_shdn_force_n" "$GPIO_LOW"
+    sleep "$SHUTDOWN_FORCE_DELAY_SEC"
+
+    b0_val=$(get_gpio_val_by_name "$in_shdn_ok_n")
+
+    if [[ $b0_val -ne 0 ]]; then
+        echo "ERROR: $in_shdn_ok_n failed to assert"
+        return 1
+    fi
+
+    return 0
+}
+
+shutdown_request_n_check()
+{
+    # Set Shutdown Request, wait Shutdown OK (active low) assert, 20s timeout
+    set_gpio "$out_shdn_req_n" "$GPIO_LOW"
+
+    local retry_cnt=21
+    local delay_secs=1
+    if ! wait_gpios_value "$GPIO_LOW" "$retry_cnt" "$delay_secs" "$in_shdn_ok_n"; then
+        echo "ERROR: HPM $in_shdn_ok_n failed to assert"
+        return 1
+    fi
+
+    return 0
+}
+
+host_power_on()
+{
+    echo "Power On Host"
+
+    # Check Host Power Status
+    if is_host_power_on; then
+        echo "Host is already powered on"
+        set_gpio "$out_run_pwr_en" "$GPIO_HIGH"
+        set_gpio "$out_pdb_ps_on_n" "$GPIO_LOW"
+        set_gpio "$out_pdb_run_power_en" "$GPIO_HIGH"
+        set_gpio "$out_pdb_hpm_en" "$GPIO_HIGH"
+        set_gpio "$out_pdb_gpu1_en" "$GPIO_HIGH"
+        set_gpio "$out_pdb_gpu2_en" "$GPIO_HIGH"
+        set_gpio "$out_smm_usb_pwr_en" "$GPIO_HIGH"
+        return 0
+    fi
+
+    # Set PDB run power
+    if ! pdb_run_pwr_set_n_check; then
+        return 1
+    fi
+
+    # Set CPU reset and check
+    if ! cpu_reset_set_n_check; then
+        set_gpio "$out_pre_sys_rst_n" "$GPIO_HIGH"
+        return 1
+    fi
+
+    # Enable USB Power
+    set_gpio "$out_smm_usb_pwr_en" "$GPIO_HIGH"
+
+    # Set RUN_PWR_EN, wait MODULE_PWR_GOOD assert, 10s timeout
+    if ! hpm_run_pwr_set_n_check; then
+        pdb_run_pwr_release_n_check
+        set_gpio "$out_pre_sys_rst_n" "$GPIO_HIGH"
+        set_gpio "$out_run_pwr_en" "$GPIO_LOW"
+        return 1
+    fi
+
+    # Release CPU reset and check
+    if ! cpu_reset_release_n_check; then
+        set_gpio "$out_run_pwr_en" "$GPIO_LOW"
+        return 1
+    fi
+
+    echo "Power On Host Successfully"
+    return 0
+}
+
+host_force_power_off()
+{
+    echo "Force Power Off Host"
+
+    local failed=0
+
+    # Check Host Power Status
+    if is_host_power_off; then
+        echo "Host is already powered off"
+        set_gpio "$out_run_pwr_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_hpm_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_gpu1_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_gpu2_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_run_power_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_ps_on_n" "$GPIO_HIGH"
+        set_gpio "$out_smm_usb_pwr_en" "$GPIO_LOW"
+        return 0
+    fi
+
+    # Set Shutdown Force, wait Shutdown OK assert, 100ms timeout
+    if ! shutdown_force_n_check; then
+        echo "Continue Force Power Off Sequence..."
+    fi
+
+    # Set CPU reset and check
+    if ! cpu_reset_set_n_check; then
+        set_gpio "$out_pre_sys_rst_n" "$GPIO_HIGH"
+        set_gpio "$out_shdn_force_n" "$GPIO_HIGH"
+        return 1
+    fi
+
+    # Disable USB Power
+    set_gpio "$out_smm_usb_pwr_en" "$GPIO_LOW"
+
+    # Release RUN_PWR_EN, wait MODULE_PWR_GOOD deassert, 10s timeout
+    if ! hpm_run_pwr_release_n_check; then
+        failed=1
+    fi
+
+    if ! pdb_run_pwr_release_n_check; then
+        failed=1
+    fi
+
+    # Clean up
+    set_gpio "$out_pre_sys_rst_n" "$GPIO_HIGH"
+    set_gpio "$out_shdn_force_n" "$GPIO_HIGH"
+
+    if [[ $failed -eq 1 ]]; then
+        echo "Force Power Off Host Failed"
+        return 1
+    fi
+
+    echo "Force Power Off Host Successfully"
+    return 0
+}
+
+host_graceful_power_off()
+{
+    echo "Graceful Power Off Host"
+
+    local failed=0
+
+    # Check Host Power Status
+    if is_host_power_off; then
+        echo "Host is already powered off"
+        set_gpio "$out_run_pwr_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_hpm_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_gpu1_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_gpu2_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_run_power_en" "$GPIO_LOW"
+        set_gpio "$out_pdb_ps_on_n" "$GPIO_HIGH"
+        set_gpio "$out_smm_usb_pwr_en" "$GPIO_LOW"
+        return 0
+    fi
+
+    # Set Shutdown Request, wait Shutdown OK assert, 20s timeout
+    if ! shutdown_request_n_check; then
+        set_gpio "$out_shdn_req_n" "$GPIO_HIGH"
+        return 1
+    fi
+
+    # Set CPU reset and check
+    if ! cpu_reset_set_n_check; then
+        set_gpio "$out_pre_sys_rst_n" "$GPIO_HIGH"
+        set_gpio "$out_shdn_req_n" "$GPIO_HIGH"
+        return 1
+    fi
+
+    # Disable USB Power
+    set_gpio "$out_smm_usb_pwr_en" "$GPIO_LOW"
+
+    # Release RUN_PWR_EN, wait MODULE_PWR_GOOD deassert, 10s timeout
+    if ! hpm_run_pwr_release_n_check; then
+        failed=1
+    fi
+
+    if ! pdb_run_pwr_release_n_check; then
+        failed=1
+    fi
+
+    # Clean up
+    set_gpio "$out_pre_sys_rst_n" "$GPIO_HIGH"
+    set_gpio "$out_shdn_req_n" "$GPIO_HIGH"
+
+    if [[ $failed -eq 1 ]]; then
+        echo "Graceful Power Off Host Failed"
+        return 1
+    fi
+
+    echo "Graceful Power Off Host Successfully"
+    return 0
+}
+
+host_power_reset()
+{
+    # Set Shutdown Force, wait Shutdown OK assert
+    if ! shutdown_force_n_check; then
+        echo "Continuing with System Reset Sequence..."
+    fi
+
+    echo "De-asserting CPU Shutdown Force..."
+    set_gpio "$out_shdn_force_n" "$GPIO_HIGH"
+
+    # Set CPU reset and check
+    if ! cpu_reset_set_n_check; then
+        set_gpio "$out_pre_sys_rst_n" "$GPIO_HIGH"
+        return 1
+    fi
+
+    sleep 1
+
+    # Release CPU reset and check
+    if ! cpu_reset_release_n_check; then
+        return 1
+    fi
+
+    return 0
+}
+
+host_power_status()
+{
+    local hpm0_pg
+
+    hpm0_pg=$(get_gpio_val_by_name "$in_run_pwr_pg")
+
+    if [[ "$hpm0_pg" -eq 1 ]]; then
+        echo "on"
+    else
+        echo "off"
+    fi
+}
+
+is_host_power_on()
+{
+    [[ "$(host_power_status)" == "on" ]] && return 0
+    return 1
+}
+
+is_host_power_off()
+{
+    [[ "$(host_power_status)" == "off" ]] && return 0
+    return 1
+}
+
+wait_host_power_change()
+{
+    local exp_val="$1"
+    local max_check_cnt="$2"
+    local count=0
+    until [[ $count -gt "$max_check_cnt" ]]
+    do
+        sleep 1
+        if [[ "$(host_power_status)" == "$exp_val" ]]; then
+            return 0
+        fi
+        ((count++))
+    done
+
+    return 1
+}
+
