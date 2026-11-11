@@ -1,0 +1,6 @@
+[Match]
+OriginalName=mctpusb*
+
+[Link]
+NamePolicy=path
+
