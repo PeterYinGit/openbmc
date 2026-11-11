@@ -1,0 +1,318 @@
+#!/bin/bash
+
+MCTP_INTF=$1
+MAX_RETRIES=60
+RETRY_DELAY=2
+
+# Default Local BMC EID
+LOCAL_EID=8
+ADDITIONAL_LOCAL_EID=""
+
+# VR C2 (S8Q) MCTP Interface & EID Mapping
+# Reference: vr_mctp_bmc_target_configuration.json / vr_static_inventory.json / fw_update_config_c2.json
+case "$MCTP_INTF" in
+    # 1. USB MCTP Bridges (SMAs)
+    # HPM SMA 0 (USB Path: 1-1.2.1.1)
+    mcu1u2u1u1 | musb1_1_2_1_1)
+        MCTP_EID=20; POOL_START=21; POOL_SIZE=9
+        ;;
+    # BlueField-4 SMA (USB Path: 1-1.2.1.3.2.1) -> Downstream BF4 at EID 58
+    mcu1u2u1u3u2u1 | musb1_1_2_1_3_2_1)
+        MCTP_EID=55; POOL_START=56; POOL_SIZE=4
+        ;;
+    # E1.S Storage Backplane SMA 0 (C2 USB Path: 1-1.3.1.2.2 / C1 USB Path: 1-1.2.1.4.1)
+    mcu1u3u1u2u2 | mcu1u2u1u4u1 | musb1_1_3_1_2_2 | musb1_1_2_1_4_1)
+        MCTP_EID=60; POOL_START=61; POOL_SIZE=9
+        ;;
+    # GPU SMA 0 (USB Path: 1-1.2.1.3.1) -> Downstream GPU_0 (71), IRoT_GPU_0 (72)
+    mcu1u2u1u3u1 | musb1_1_2_1_3_1)
+        MCTP_EID=70; POOL_START=71; POOL_SIZE=9
+        ;;
+    # GPU SMA 1 (C2 USB Path: 1-1.3.1.3.1 / C1 USB Path: 1-1.2.1.3.4) -> Downstream GPU_1 (81), IRoT_GPU_1 (82)
+    mcu1u3u1u3u1 | mcu1u2u1u3u4 | musb1_1_3_1_3_1 | musb1_1_2_1_3_4)
+        MCTP_EID=80; POOL_START=81; POOL_SIZE=9
+        ;;
+
+    # 2. USB Direct MCTP Endpoints (Vera CPUs)
+    # Vera CPU 0 / IRoT_CPU_0 (USB Path: 1-1.3.1.4.1)
+    mcu1u3u1u4u1 | musb1_1_3_1_4_1)
+        MCTP_EID=16; POOL_START=0; POOL_SIZE=0
+        ;;
+    # Vera CPU 1 / IRoT_CPU_1 (USB Path: 1-1.3.1.4.2)
+    mcu1u3u1u4u2 | musb1_1_3_1_4_2)
+        MCTP_EID=17; POOL_START=0; POOL_SIZE=0
+        ;;
+
+    # 3. SPI Direct MCTP Endpoint (BMC ERoT)
+    mctpspi0_2)
+        MCTP_EID=10; POOL_START=0; POOL_SIZE=0; ADDITIONAL_LOCAL_EID=9
+        ;;
+
+    # 4. PCIe VDM MCTP Bridge (OOBHub -> Downstream CX8/CX9 at EID 129, 161)
+    mctppci0)
+        MCTP_EID=126; POOL_START=127; POOL_SIZE=64; ADDITIONAL_LOCAL_EID=12
+        ;;
+
+    *)
+        echo "Unknown VR C2 (S8Q) MCTP interface: $MCTP_INTF"
+        exit 1
+        ;;
+esac
+
+setup_mctp_addr() {
+    if ! /usr/bin/mctp addr show "$MCTP_INTF" | grep -q "eid $LOCAL_EID"; then
+        echo "Setting MCTP address $LOCAL_EID for $MCTP_INTF..."
+        /usr/bin/mctp addr add "$LOCAL_EID" dev "$MCTP_INTF" || return 1
+    else
+        echo "MCTP address $LOCAL_EID already exists for $MCTP_INTF."
+    fi
+
+    if [ -n "$ADDITIONAL_LOCAL_EID" ]; then
+        if ! /usr/bin/mctp addr show "$MCTP_INTF" | grep -q "eid $ADDITIONAL_LOCAL_EID"; then
+            echo "Setting additional MCTP address $ADDITIONAL_LOCAL_EID for $MCTP_INTF..."
+            /usr/bin/mctp addr add "$ADDITIONAL_LOCAL_EID" dev "$MCTP_INTF" || return 1
+        fi
+    fi
+
+    return 0
+}
+
+setup_mctp_link() {
+    if /usr/bin/mctp link show "$MCTP_INTF" | grep -q "up"; then
+        echo "MCTP link $MCTP_INTF is already UP."
+        return 0
+    fi
+
+    echo "Bringing MCTP link $MCTP_INTF UP..."
+    /usr/bin/mctp link set "$MCTP_INTF" up
+}
+
+check_service_status() {
+    local SERVICE_NAME="mctpd.service"
+
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        echo "Service $SERVICE_NAME is running."
+        return 0
+    fi
+
+    echo "Waiting for $SERVICE_NAME to be active..."
+    return 1
+}
+
+assign_static_eid() {
+    if [[ "$MCTP_INTF" == mctppci* ]]; then
+        echo "Calling AssignBridgeStatic on PCIe interface $MCTP_INTF..."
+        echo "EID: $MCTP_EID, POOL_START: $POOL_START, POOL_SIZE: $POOL_SIZE"
+        # Try 3-byte BDF (0x00 0x00 0x00), fallback to 2-byte BDF (0x00 0x00) or empty hwaddr
+        busctl call au.com.codeconstruct.MCTP1 \
+            /au/com/codeconstruct/mctp1/interfaces/"$MCTP_INTF" \
+            au.com.codeconstruct.MCTP.BusOwner1 \
+            AssignBridgeStatic ayyyy 3 0x00 0x00 0x00 "$MCTP_EID" "$POOL_START" "$POOL_SIZE" || \
+        busctl call au.com.codeconstruct.MCTP1 \
+            /au/com/codeconstruct/mctp1/interfaces/"$MCTP_INTF" \
+            au.com.codeconstruct.MCTP.BusOwner1 \
+            AssignBridgeStatic ayyyy 2 0x00 0x00 "$MCTP_EID" "$POOL_START" "$POOL_SIZE" || \
+        busctl call au.com.codeconstruct.MCTP1 \
+            /au/com/codeconstruct/mctp1/interfaces/"$MCTP_INTF" \
+            au.com.codeconstruct.MCTP.BusOwner1 \
+            AssignBridgeStatic ayyyy 0 "$MCTP_EID" "$POOL_START" "$POOL_SIZE"
+    elif [ "$POOL_SIZE" -gt 0 ]; then
+        echo "Calling AssignBridgeStatic..."
+        echo "EID: $MCTP_EID"
+        echo "POOL_SIZE: $POOL_SIZE"
+        echo "POOL_START: $POOL_START"
+        busctl call au.com.codeconstruct.MCTP1 \
+            /au/com/codeconstruct/mctp1/interfaces/"$MCTP_INTF" \
+            au.com.codeconstruct.MCTP.BusOwner1 \
+            AssignBridgeStatic ayyyy 0 "$MCTP_EID" "$POOL_START" "$POOL_SIZE"
+    else
+        echo "Calling AssignEndpointStatic..."
+        echo "EID: $MCTP_EID"
+        busctl call au.com.codeconstruct.MCTP1 \
+            /au/com/codeconstruct/mctp1/interfaces/"$MCTP_INTF" \
+            au.com.codeconstruct.MCTP.BusOwner1 \
+            AssignEndpointStatic ayy 0 "$MCTP_EID"
+    fi
+}
+
+remove_eid() {
+    local eid=$1
+    if mapper get-service /au/com/codeconstruct/mctp1/networks/1/endpoints/"$eid" 2>/dev/null; then
+        echo "Removing EID $eid"
+        busctl call au.com.codeconstruct.MCTP1 \
+            "/au/com/codeconstruct/mctp1/networks/1/endpoints/${eid}" \
+            au.com.codeconstruct.MCTP.Endpoint1 \
+            Remove
+    fi
+}
+
+remove_eids() {
+    local start_eid="$MCTP_EID"
+    local end_eid="$((MCTP_EID + POOL_SIZE))"
+    local ep_regex="endpoints/([0-9]+)"
+    local eid
+
+    # Check if busctl is even available/service is running to avoid stderr noise
+    if ! busctl introspect au.com.codeconstruct.MCTP1 / >/dev/null 2>&1; then
+        echo "Error: MCTP service not reachable."
+        return 1
+    fi
+
+    # Using a process substitution <(...) to avoid subshell issues with variables
+    while IFS= read -r line; do
+        if [[ "$line" =~ $ep_regex ]]; then
+            eid="${BASH_REMATCH[1]}"
+
+            # 1. Use -ge and -le for inclusive range
+            # 2. Basic numeric validation to ensure $eid is actually an integer
+            if [[ "$eid" =~ ^[0-9]+$ ]] && [ "$eid" -ge "$start_eid" ] && [ "$eid" -le "$end_eid" ]; then
+                echo "Removing EID: $eid"
+                remove_eid "$eid"
+            fi
+        fi
+    done < <(busctl tree au.com.codeconstruct.MCTP1 --no-pager)
+}
+
+is_host_on() {
+    local state
+    state=$(busctl get-property \
+            xyz.openbmc_project.State.Host \
+            /xyz/openbmc_project/state/host0 \
+            xyz.openbmc_project.State.Host CurrentHostState \
+        | cut -d'"' -f2)
+
+    [[ "$state" == "xyz.openbmc_project.State.Host.HostState.Running" ]]
+}
+
+wait_for_host_on() {
+    if ! is_host_on; then
+        echo "Waiting for host power on..."
+        while ! is_host_on; do
+            sleep 10
+        done
+        # Give the device some settle time after power is detected
+        sleep 3
+    fi
+}
+
+learn_eid() {
+    local target_eid="$1"
+    local network_path="/au/com/codeconstruct/mctp1/networks/1"
+    local interface="au.com.codeconstruct.MCTP.Network1"
+
+    echo "--- Starting EID Discovery (Target EID: $target_eid) ---"
+
+    # Learn EID loop
+    for ((i=1; i<=MAX_RETRIES; i++)); do
+        echo "--- Learn Attempt $i/$MAX_RETRIES ---"
+
+        if busctl call au.com.codeconstruct.MCTP1 \
+            "$network_path" \
+            "$interface" \
+            LearnEndpoint y "$target_eid" --timeout=5; then
+
+            echo "--- Learn EID $target_eid: SUCCESS ---"
+            return 0
+        fi
+
+        echo "Attempt $i failed. Retrying in ${RETRY_DELAY}s..."
+        sleep "$RETRY_DELAY"
+    done
+
+    echo "ERROR: Failed to learn EID $target_eid after $MAX_RETRIES attempts."
+    return 1
+}
+
+learn_gpu_downstream_eid() {
+    local rc=0
+
+    learn_eid "$((MCTP_EID + 1))" || rc=$?  # NSM_DEV_GPU_0 (71) / NSM_DEV_GPU_1 (81)
+    learn_eid "$((MCTP_EID + 2))" || rc=$?  # IRoT_GPU_0 (72) / IRoT_GPU_1 (82)
+    return $rc
+}
+
+learn_bf4_downstream_eid() {
+    local rc=0
+
+    learn_eid "$((MCTP_EID + 3))" || rc=$?  # NSM_DEV_BF4 / BF4 (58)
+    return $rc
+}
+
+learn_pcie_downstream_eid() {
+    local rc=0
+
+    learn_eid 129 || rc=$?  # CX_0 / IRoT_CX_0 (129)
+    learn_eid 161 || rc=$?  # CX_1 / IRoT_CX_1 (161)
+    return $rc
+}
+
+success=false
+for ((i=1; i<=MAX_RETRIES; i++)); do
+    sleep $RETRY_DELAY
+    echo "--- Attempt $i/$MAX_RETRIES ---"
+
+    if ! setup_mctp_addr; then
+        echo "setup_mctp_addr() failed"
+        continue
+    fi
+
+    if ! setup_mctp_link; then
+        echo "setup_mctp_link() failed"
+        continue
+    fi
+
+    if ! check_service_status; then
+        echo "check_service_status() failed"
+        continue
+    fi
+
+    if ! remove_eids; then
+        echo "remove_eids() failed"
+        continue
+    fi
+
+    if ! assign_static_eid; then
+        echo "assign_static_eid() failed"
+        continue
+    fi
+
+    echo "--- MCTP Setup Completed Successfully for $MCTP_INTF ---"
+    success=true
+    break
+done
+
+if [ "$success" = false ]; then
+    echo "Error: MCTP setup failed after $MAX_RETRIES attempts."
+    exit 1
+fi
+
+case $MCTP_INTF in
+    mcu1u2u1u3u1 | mcu1u3u1u3u1 | mcu1u2u1u3u4 | musb1_1_2_1_3_1 | musb1_1_3_1_3_1 | musb1_1_2_1_3_4)
+        wait_for_host_on
+        if ! learn_gpu_downstream_eid; then
+            echo "Error: GPU downstream EID learning failed. Exiting."
+            exit 1
+        fi
+        ;;
+    mcu1u2u1u3u2u1 | musb1_1_2_1_3_2_1)
+        wait_for_host_on
+        if ! learn_bf4_downstream_eid; then
+            echo "Error: BlueField-4 downstream EID learning failed. Exiting."
+            exit 1
+        fi
+        ;;
+    mctppci0)
+        wait_for_host_on
+        if ! learn_pcie_downstream_eid; then
+            echo "Error: PCIe OOBHub downstream (CX8/CX9) EID learning failed. Exiting."
+            exit 1
+        fi
+        ;;
+    *)
+        echo "No additional EID learning required for $MCTP_INTF."
+        ;;
+esac
+
+echo "--- All MCTP tasks completed successfully ---"
+exit 0
+
