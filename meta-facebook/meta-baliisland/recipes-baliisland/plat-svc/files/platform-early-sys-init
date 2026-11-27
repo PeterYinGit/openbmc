@@ -1,0 +1,15 @@
+#!/bin/bash -e
+# shellcheck source=meta-facebook/recipes-fb/obmc_functions/files/fb-common-functions
+source /usr/libexec/fb-common-functions
+
+echo "Starting Baliisland platform early system init..."
+
+# Perform device initialization, configure initial GPIOs, and bind/rebind I2C devices
+if /usr/libexec/plat-svc/device-initialize; then
+    echo "Device initialization successful."
+else
+    echo "Error: Device initialization failed."
+    exit 1
+fi
+
+exit 0

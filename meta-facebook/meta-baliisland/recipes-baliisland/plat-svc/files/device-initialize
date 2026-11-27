@@ -1,0 +1,116 @@
+#!/bin/bash
+# shellcheck source=meta-facebook/recipes-fb/obmc_functions/files/fb-common-functions
+source /usr/libexec/fb-common-functions
+
+GPIO_HIGH=1
+GPIO_LOW=0
+
+wait_gpio_value()
+{
+    local net_name=$1
+    local expd_val=$2
+    local max_retries=$3
+    local delay_secs=$4
+
+    local gpio_val
+    local trycnt=1
+
+    while [[ $trycnt -le $max_retries ]]; do
+        gpio_val=$(get_gpio "$net_name")
+        rc=$?
+        if [[ $rc -eq 0 && "$gpio_val" -eq "$expd_val" ]]; then
+            return 0
+        fi
+        sleep "$delay_secs"
+        ((trycnt++))
+    done
+
+    echo "wait_gpio_value failed: $net_name (expected $expd_val, last got ${gpio_val:-unknown})"
+    return 1
+}
+
+bind_gpio_expanders()
+{
+    echo "Binding primary GPIO expanders..."
+    # Bus 1 expanders (MGMT1 Board 0)
+    # 1-0020 provides B0_M1_I2C_SOCAMM_UPHY_SEL-O and B0_M1_CPLD_READY-I
+    bind_i2c_device pca953x 1-0020 3
+    bind_i2c_device pca953x 1-0021 3
+
+    # Bus 2 expanders (MGMT0 Board 0)
+    # 2-0020 provides B0_M0_STBY_PWR_PG-I and B0_M0_CPLD_READY-I
+    bind_i2c_device pca953x 2-0020 3
+    bind_i2c_device pca953x 2-0021 3
+    bind_i2c_device pca953x 2-0022 3
+    bind_i2c_device pca953x 2-0023 3
+}
+
+rebind_i2c_device()
+{
+    local driver="$1"
+    local dev="$2"
+    local retries=${3:-3}
+
+    # If the device is already bound, unbind first to ensure a clean state
+    if [ -L "/sys/bus/i2c/drivers/${driver}/${dev}" ]; then
+        echo "${dev}" > "/sys/bus/i2c/drivers/${driver}/unbind" 2>/dev/null || true
+    fi
+
+    # Bind the device with retry
+    bind_i2c_device "${driver}" "${dev}" "${retries}"
+}
+
+rebind_i2c_muxes()
+{
+    echo "Rebinding I2C muxes on bus 4..."
+    local muxes="4-0070 4-0071 4-0075"
+    for mux in $muxes; do
+        rebind_i2c_device pca954x "${mux}" 3
+    done
+}
+
+# ==============================================================================
+# Start Here
+# ==============================================================================
+
+echo "Starting device initialization and peripheral configuration..."
+
+# 1. Enable Standby Power if not already high
+if [ "$(get_gpio "STBY_POWER_PG-I")" -ne "$GPIO_HIGH" ]; then
+    echo "Enabling STBY_POWER_EN-O..."
+    set_gpio "STBY_POWER_EN-O" "$GPIO_HIGH"
+
+    # Wait for standby power good (timeout 20s)
+    if ! wait_gpio_value "STBY_POWER_PG-I" "$GPIO_HIGH" 20 1; then
+        echo "Error: STBY_POWER_PG-I failed to assert after 20 seconds."
+        exit 1
+    fi
+fi
+
+# 2. Bind primary GPIO expanders so downstream GPIO lines become accessible
+bind_gpio_expanders
+
+# 3. Wait for board standby power good
+if ! wait_gpio_value "B0_M0_STBY_PWR_PG-I" "$GPIO_HIGH" 20 1; then
+    echo "Warning: B0_M0_STBY_PWR_PG-I failed to assert after 20 seconds."
+fi
+
+# 4. Wait for CPLD Ready
+echo "Waiting for CPLD Ready..."
+if ! wait_gpio_value "B0_M0_CPLD_READY-I" "$GPIO_HIGH" 10 1; then
+    echo "Warning: B0_M0_CPLD_READY-I failed to assert after 10 seconds."
+fi
+
+# 5. Set B0_M1_I2C_SOCAMM_UPHY_SEL-O to LOW (0)
+# This selects the SOCAMM / UPHY I2C bus path before binding downstream I2C muxes.
+echo "Setting B0_M1_I2C_SOCAMM_UPHY_SEL-O to LOW..."
+if ! set_gpio "B0_M1_I2C_SOCAMM_UPHY_SEL-O" "$GPIO_LOW"; then
+    echo "Error: Failed to set B0_M1_I2C_SOCAMM_UPHY_SEL-O to LOW."
+fi
+
+# 6. Rebind I2C MUX drivers on bus 4 (4-0070, 4-0071, 4-0075)
+rebind_i2c_muxes
+
+echo "Device initialization and peripheral configuration completed successfully."
+exit 0
+
