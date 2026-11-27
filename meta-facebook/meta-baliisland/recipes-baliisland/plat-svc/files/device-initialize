@@ -111,6 +111,12 @@ fi
 # 6. Rebind I2C MUX drivers on bus 4 (4-0070, 4-0071, 4-0075)
 rebind_i2c_muxes
 
+# 7. Register NVIDIA APX (0955:7410) MCTP interface with mctp-usb driver
+if [ -d /sys/bus/usb/drivers/mctp-usb ]; then
+    echo "Registering NVIDIA APX USB VID:PID (0955:7410) with mctp-usb..."
+    echo "0955 7410 14" > /sys/bus/usb/drivers/mctp-usb/new_id 2>/dev/null || true
+fi
+
 echo "Device initialization and peripheral configuration completed successfully."
 exit 0
 
