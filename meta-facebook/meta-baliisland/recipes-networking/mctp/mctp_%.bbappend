@@ -22,16 +22,11 @@ SYSTEMD_SERVICE:${PN}:append = " ${@compose_list(d, 'SYSTEMD_SERVICE_FMT', 'SMA_
 
 SMA_MCTP_INSTANCES = " \
     mcu1u2u1u1 \
-    mcu1u2u1u3u2u1 \
     mcu1u3u1u2u2 \
     mcu1u2u1u4u1 \
-    mcu1u2u1u3u1 \
-    mcu1u3u1u3u1 \
-    mcu1u2u1u3u4 \
-    mcu1u3u1u4u1 \
-    mcu1u3u1u4u2 \
-    mctpspi0_2 \
-    mctppci0 \
+    mcu1u2u1u4u2 \
+    mcu1u3u1u4u1i2 \
+    mcu1u3u1u4u2i2 \
 "
 
 do_install:append() {

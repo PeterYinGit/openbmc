@@ -13,43 +13,26 @@ ADDITIONAL_LOCAL_EID=""
 case "$MCTP_INTF" in
     # 1. USB MCTP Bridges (SMAs)
     # HPM SMA 0 (USB Path: 1-1.2.1.1)
-    mcu1u2u1u1 | musb1_1_2_1_1)
+    mcu1u2u1u1* | musb1_1_2_1_1*)
         MCTP_EID=20; POOL_START=21; POOL_SIZE=9
         ;;
-    # BlueField-4 SMA (USB Path: 1-1.2.1.3.2.1) -> Downstream BF4 at EID 58
-    mcu1u2u1u3u2u1 | musb1_1_2_1_3_2_1)
-        MCTP_EID=55; POOL_START=56; POOL_SIZE=4
-        ;;
-    # E1.S Storage Backplane SMA 0 (C2 USB Path: 1-1.3.1.2.2 / C1 USB Path: 1-1.2.1.4.1)
-    mcu1u3u1u2u2 | mcu1u2u1u4u1 | musb1_1_3_1_2_2 | musb1_1_2_1_4_1)
-        MCTP_EID=60; POOL_START=61; POOL_SIZE=9
-        ;;
-    # GPU SMA 0 (USB Path: 1-1.2.1.3.1) -> Downstream GPU_0 (71), IRoT_GPU_0 (72)
-    mcu1u2u1u3u1 | musb1_1_2_1_3_1)
-        MCTP_EID=70; POOL_START=71; POOL_SIZE=9
-        ;;
-    # GPU SMA 1 (C2 USB Path: 1-1.3.1.3.1 / C1 USB Path: 1-1.2.1.3.4) -> Downstream GPU_1 (81), IRoT_GPU_1 (82)
-    mcu1u3u1u3u1 | mcu1u2u1u3u4 | musb1_1_3_1_3_1 | musb1_1_2_1_3_4)
-        MCTP_EID=80; POOL_START=81; POOL_SIZE=9
+    # E1.S Storage Backplane SMA 0 (C2 USB Path: 1-1.3.1.2.2 / C1 USB Path: 1-1.2.1.4.1 or 1-1.2.1.4.2)
+    mcu1u3u1u2u2* | mcu1u2u1u4* | musb1_1_3_1_2_2* | musb1_1_2_1_4*)
+        MCTP_EID=60; POOL_START=61; POOL_SIZE=8
         ;;
 
     # 2. USB Direct MCTP Endpoints (Vera CPUs)
-    # Vera CPU 0 / IRoT_CPU_0 (USB Path: 1-1.3.1.4.1)
-    mcu1u3u1u4u1 | musb1_1_3_1_4_1)
+    # Vera CPU 0 / IRoT_CPU_0 (USB Path: 1-1.3.1.4.1, Interface 2)
+    mcu1u3u1u4u1* | musb1_1_3_1_4_1*)
         MCTP_EID=16; POOL_START=0; POOL_SIZE=0
         ;;
-    # Vera CPU 1 / IRoT_CPU_1 (USB Path: 1-1.3.1.4.2)
-    mcu1u3u1u4u2 | musb1_1_3_1_4_2)
+    # Vera CPU 1 / IRoT_CPU_1 (USB Path: 1-1.3.1.4.2, Interface 2)
+    mcu1u3u1u4u2* | musb1_1_3_1_4_2*)
         MCTP_EID=17; POOL_START=0; POOL_SIZE=0
         ;;
 
-    # 3. SPI Direct MCTP Endpoint (BMC ERoT)
-    mctpspi0_2)
-        MCTP_EID=10; POOL_START=0; POOL_SIZE=0; ADDITIONAL_LOCAL_EID=9
-        ;;
-
-    # 4. PCIe VDM MCTP Bridge (OOBHub -> Downstream CX8/CX9 at EID 129, 161)
-    mctppci0)
+    # 3. PCIe VDM MCTP Bridge (OOBHub -> Downstream CX8/CX9 at EID 129, 161)
+    mctppci0*)
         MCTP_EID=126; POOL_START=127; POOL_SIZE=64; ADDITIONAL_LOCAL_EID=12
         ;;
 
@@ -103,7 +86,6 @@ assign_static_eid() {
     if [[ "$MCTP_INTF" == mctppci* ]]; then
         echo "Calling AssignBridgeStatic on PCIe interface $MCTP_INTF..."
         echo "EID: $MCTP_EID, POOL_START: $POOL_START, POOL_SIZE: $POOL_SIZE"
-        # Try 3-byte BDF (0x00 0x00 0x00), fallback to 2-byte BDF (0x00 0x00) or empty hwaddr
         busctl call au.com.codeconstruct.MCTP1 \
             /au/com/codeconstruct/mctp1/interfaces/"$MCTP_INTF" \
             au.com.codeconstruct.MCTP.BusOwner1 \
@@ -178,7 +160,7 @@ is_host_on() {
     state=$(busctl get-property \
             xyz.openbmc_project.State.Host \
             /xyz/openbmc_project/state/host0 \
-            xyz.openbmc_project.State.Host CurrentHostState \
+            xyz.openbmc_project.State.Host CurrentHostState 2>/dev/null \
         | cut -d'"' -f2)
 
     [[ "$state" == "xyz.openbmc_project.State.Host.HostState.Running" ]]
@@ -197,14 +179,14 @@ wait_for_host_on() {
 
 learn_eid() {
     local target_eid="$1"
+    local retries="${2:-$MAX_RETRIES}"
     local network_path="/au/com/codeconstruct/mctp1/networks/1"
     local interface="au.com.codeconstruct.MCTP.Network1"
 
     echo "--- Starting EID Discovery (Target EID: $target_eid) ---"
 
-    # Learn EID loop
-    for ((i=1; i<=MAX_RETRIES; i++)); do
-        echo "--- Learn Attempt $i/$MAX_RETRIES ---"
+    for ((i=1; i<=retries; i++)); do
+        echo "--- Learn Attempt $i/$retries (EID: $target_eid) ---"
 
         if busctl call au.com.codeconstruct.MCTP1 \
             "$network_path" \
@@ -219,23 +201,8 @@ learn_eid() {
         sleep "$RETRY_DELAY"
     done
 
-    echo "ERROR: Failed to learn EID $target_eid after $MAX_RETRIES attempts."
+    echo "WARNING: Failed to learn EID $target_eid after $retries attempts."
     return 1
-}
-
-learn_gpu_downstream_eid() {
-    local rc=0
-
-    learn_eid "$((MCTP_EID + 1))" || rc=$?  # NSM_DEV_GPU_0 (71) / NSM_DEV_GPU_1 (81)
-    learn_eid "$((MCTP_EID + 2))" || rc=$?  # IRoT_GPU_0 (72) / IRoT_GPU_1 (82)
-    return $rc
-}
-
-learn_bf4_downstream_eid() {
-    local rc=0
-
-    learn_eid "$((MCTP_EID + 3))" || rc=$?  # NSM_DEV_BF4 / BF4 (58)
-    return $rc
 }
 
 learn_pcie_downstream_eid() {
@@ -287,21 +254,7 @@ if [ "$success" = false ]; then
 fi
 
 case $MCTP_INTF in
-    mcu1u2u1u3u1 | mcu1u3u1u3u1 | mcu1u2u1u3u4 | musb1_1_2_1_3_1 | musb1_1_3_1_3_1 | musb1_1_2_1_3_4)
-        wait_for_host_on
-        if ! learn_gpu_downstream_eid; then
-            echo "Error: GPU downstream EID learning failed. Exiting."
-            exit 1
-        fi
-        ;;
-    mcu1u2u1u3u2u1 | musb1_1_2_1_3_2_1)
-        wait_for_host_on
-        if ! learn_bf4_downstream_eid; then
-            echo "Error: BlueField-4 downstream EID learning failed. Exiting."
-            exit 1
-        fi
-        ;;
-    mctppci0)
+    mctppci0*)
         wait_for_host_on
         if ! learn_pcie_downstream_eid; then
             echo "Error: PCIe OOBHub downstream (CX8/CX9) EID learning failed. Exiting."
@@ -315,4 +268,3 @@ esac
 
 echo "--- All MCTP tasks completed successfully ---"
 exit 0
-
